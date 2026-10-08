@@ -8,6 +8,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.themarioga.engine.cah.config.GameConfig;
+import org.themarioga.engine.cah.exceptions.game.GameNotEnoughHumansException;
 import org.themarioga.engine.cah.dao.intf.game.GameDao;
 import org.themarioga.engine.cah.enums.PunctuationModeEnum;
 import org.themarioga.engine.cah.enums.VotationModeEnum;
@@ -323,6 +324,7 @@ class GameServiceTest {
         game.getPlayers().add(player);
         game.getPlayers().add(new Player());
         when(gameConfig.getDefaultMinNumberOfPlayers()).thenReturn(3);
+        when(gameConfig.getMinHumanPlayers()).thenReturn(2);
         when(gameDao.createOrUpdate(game)).thenReturn(game);
 
         Game startedGame = gameService.startGame(game);
@@ -350,8 +352,36 @@ class GameServiceTest {
         game.setMaxNumberOfPlayers(1);
         game.getPlayers().add(player);
         when(gameConfig.getDefaultMinNumberOfPlayers()).thenReturn(1);
+        when(gameConfig.getMinHumanPlayers()).thenReturn(2);
 
         Assertions.assertThrows(GameAlreadyFilledException.class, () -> gameService.startGame(game));
+    }
+
+    /**
+     * Las IAs completan la partida, pero no cuentan como humanos: con un solo humano y dos IAs hay
+     * jugadores de sobra y aun así no se puede empezar.
+     */
+    @Test
+    void testStartGame_NotEnoughHumans() {
+        game.getPlayers().add(aiPlayer());
+        game.getPlayers().add(aiPlayer());
+        when(gameConfig.getDefaultMinNumberOfPlayers()).thenReturn(3);
+        when(gameConfig.getMinHumanPlayers()).thenReturn(2);
+
+        Assertions.assertThrows(GameNotEnoughHumansException.class, () -> gameService.startGame(game));
+    }
+
+    @Test
+    void testStartGame_WithAIPlayers() {
+        game.getPlayers().add(player);
+        game.getPlayers().add(aiPlayer());
+        when(gameConfig.getDefaultMinNumberOfPlayers()).thenReturn(3);
+        when(gameConfig.getMinHumanPlayers()).thenReturn(2);
+        when(gameDao.createOrUpdate(game)).thenReturn(game);
+
+        Game startedGame = gameService.startGame(game);
+
+        Assertions.assertEquals(GameStatusEnum.STARTED, startedGame.getStatus());
     }
 
     @Test
@@ -386,6 +416,40 @@ class GameServiceTest {
         Assertions.assertEquals(2, updatedGame.getDeletionVotes().size());
         Assertions.assertEquals(playerUser, updatedGame.getDeletionVotes().get(1));
         Assertions.assertEquals(GameStatusEnum.DELETING, updatedGame.getStatus());
+    }
+
+    /**
+     * Las IAs no votan nunca: si contaran para el quórum, con tres IAs y tres humanos harían falta
+     * cuatro votos de los dos humanos que pueden votar (el creador no puede).
+     */
+    @Test
+    void testVoteDeletion_AIPlayersDontCount() {
+        game.setStatus(GameStatusEnum.STARTED);
+        game.getPlayers().add(player);
+        Player anotherPlayer = new Player();
+        User anotherUser = new User();
+        anotherUser.setId(UUID.fromString("99999999-9999-9999-9999-999999999999"));
+        anotherPlayer.setUser(anotherUser);
+        game.getPlayers().add(anotherPlayer);
+        game.getPlayers().add(aiPlayer());
+        game.getPlayers().add(aiPlayer());
+        game.getPlayers().add(aiPlayer());
+        game.getDeletionVotes().add(anotherUser);
+
+        when(gameDao.createOrUpdate(game)).thenReturn(game);
+
+        Game updatedGame = gameService.voteForDeletion(game, player);
+
+        Assertions.assertEquals(2, updatedGame.getDeletionVotes().size());
+        Assertions.assertEquals(GameStatusEnum.DELETING, updatedGame.getStatus());
+    }
+
+    private Player aiPlayer() {
+        Player aiPlayer = new Player();
+        aiPlayer.setId(UUID.randomUUID());
+        aiPlayer.setAi(true);
+        aiPlayer.setGame(game);
+        return aiPlayer;
     }
 
     @Test

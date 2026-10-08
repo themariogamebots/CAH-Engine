@@ -10,6 +10,12 @@ import org.themarioga.commons.engine.models.User;
 
 public interface CAHService {
 
+    /**
+     * Prefijo del username de los usuarios que crea el motor para sus jugadores IA. Las plataformas
+     * lo usan para no buscarles un chat que no tienen.
+     */
+    String AI_USERNAME_PREFIX = "ai:";
+
     Game createGame(String roomName);
 
     Game createGame(Room room);
@@ -27,6 +33,10 @@ public interface CAHService {
     Game deleteGameByCreator(Room room);
 
     Game addPlayer(Room room);
+
+    Game addAIPlayer(Room room, String name);
+
+    Game removeAIPlayer(Room room);
 
     Game kickPlayer(Room room, User userKicked);
 

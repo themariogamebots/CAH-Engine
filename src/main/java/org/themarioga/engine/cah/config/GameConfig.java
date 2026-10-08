@@ -19,6 +19,7 @@ public class GameConfig {
     private Integer defaultNumberOfRoundsToEnd;
     private Integer defaultMinNumberOfPlayers;
     private Integer defaultMaxNumberOfPlayers;
+    private Integer minHumanPlayers = 2;
     private UUID defaultDictionaryId;
     private Integer numberOfCardsInHand;
 
@@ -44,6 +45,18 @@ public class GameConfig {
 
     public void setDefaultMaxNumberOfPlayers(Integer defaultMaxNumberOfPlayers) {
         this.defaultMaxNumberOfPlayers = defaultMaxNumberOfPlayers;
+    }
+
+    /**
+     * Humanos que tiene que haber como mínimo para empezar, además del mínimo de jugadores. Con
+     * menos de dos, en CLASSIC y DICTATORSHIP podría haber rondas en las que solo juegan IAs.
+     */
+    public Integer getMinHumanPlayers() {
+        return minHumanPlayers;
+    }
+
+    public void setMinHumanPlayers(Integer minHumanPlayers) {
+        this.minHumanPlayers = minHumanPlayers;
     }
 
     public Integer getDefaultMinNumberOfPlayers() {

@@ -54,13 +54,28 @@ public class PlayerServiceImpl implements PlayerService {
         if (playerDao.findPlayerByUser(user) != null)
             throw new PlayerAlreadyExistsException();
 
-        // Create player
+        return playerDao.createOrUpdate(newPlayer(game, user, false));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = ApplicationException.class)
+    public Player createAI(Game game, User user) {
+        logger.debug("Creating AI player from user {} in game {}", user, game);
+
+        Assert.assertNotNull(game, CommonErrorEnum.GAME_NOT_FOUND);
+        Assert.assertNotNull(user, CommonErrorEnum.USER_NOT_FOUND);
+
+        return playerDao.createOrUpdate(newPlayer(game, user, true));
+    }
+
+    private Player newPlayer(Game game, User user, boolean ai) {
         Player player = new Player();
         player.setGame(game);
         player.setUser(user);
         player.setJoinOrder(game.getPlayers().size());
+        player.setAi(ai);
         player.setCreationDate(new Date());
-        return playerDao.createOrUpdate(player);
+        return player;
     }
 
     @Override

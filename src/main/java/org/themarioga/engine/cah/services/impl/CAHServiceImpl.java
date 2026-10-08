@@ -6,11 +6,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.themarioga.engine.cah.ai.AIPlayerStrategy;
 import org.themarioga.engine.cah.config.GameConfig;
 import org.themarioga.engine.cah.enums.CAHErrorEnum;
 import org.themarioga.engine.cah.enums.PunctuationModeEnum;
 import org.themarioga.engine.cah.enums.RoundStatusEnum;
 import org.themarioga.engine.cah.enums.VotationModeEnum;
+import org.themarioga.engine.cah.exceptions.player.AIPlayerDoesntExistsException;
 import org.themarioga.engine.cah.exceptions.player.PlayerCannotDrawCardException;
 import org.themarioga.engine.cah.exceptions.player.PlayerCannotVoteCardException;
 import org.themarioga.engine.cah.exceptions.round.RoundPresidentCannotPlayCardException;
@@ -33,6 +35,7 @@ import org.themarioga.commons.engine.models.Room;
 import org.themarioga.commons.engine.models.User;
 import org.themarioga.commons.engine.security.SecurityUtils;
 import org.themarioga.commons.engine.services.intf.RoomService;
+import org.themarioga.commons.engine.services.intf.UserService;
 import org.themarioga.commons.engine.util.Assert;
 
 import java.security.SecureRandom;
@@ -42,6 +45,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.UUID;
 
 @Service
 public class CAHServiceImpl implements CAHService {
@@ -52,16 +56,20 @@ public class CAHServiceImpl implements CAHService {
     private final GameService gameService;
     private final PlayerService playerService;
     private final RoundService roundService;
+    private final UserService userService;
+    private final AIPlayerStrategy aiPlayerStrategy;
     private final GameConfig gameConfig;
 
     private final Random random = new SecureRandom();
 
     @Autowired
-    public CAHServiceImpl(RoomService roomService, GameService gameService, PlayerService playerService, RoundService roundService, GameConfig gameConfig) {
+    public CAHServiceImpl(RoomService roomService, GameService gameService, PlayerService playerService, RoundService roundService, UserService userService, AIPlayerStrategy aiPlayerStrategy, GameConfig gameConfig) {
         this.roomService = roomService;
         this.gameService = gameService;
         this.playerService = playerService;
         this.roundService = roundService;
+        this.userService = userService;
+        this.aiPlayerStrategy = aiPlayerStrategy;
         this.gameConfig = gameConfig;
     }
 
@@ -189,8 +197,14 @@ public class CAHServiceImpl implements CAHService {
         // Check the user performing the action is the creator
         checkSessionUserIsCreator(game);
 
+        // The AI users only exist for this game: collect them before the players are gone
+        List<User> aiUsers = getAIUsers(game);
+
         // Delete the game
         gameService.delete(game);
+
+        // Delete the AI users, now that no player references them
+        aiUsers.forEach(userService::delete);
 
         return game;
     }
@@ -211,6 +225,56 @@ public class CAHServiceImpl implements CAHService {
 
         // Add player to the game
         return gameService.addPlayer(game, player);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = ApplicationException.class)
+    public Game addAIPlayer(Room room, String name) {
+        logger.debug("Adding AI player {} to game from room {}", name, room);
+
+        // Check the name is not empty: the platform translates it, the engine knows nothing about i18n
+        Assert.assertNotEmpty(name, CommonErrorEnum.USER_NAME_EMPTY);
+
+        // Get the game
+        Game game = getGameByRoom(room);
+
+        // Check the user performing the action is the creator
+        checkSessionUserIsCreator(game);
+
+        // Each AI player needs its own user, because a user can only play one game at a time. The
+        // ':' can't collide with a Telegram alias, and "ai:" can't collide with "tg:<id>"
+        User user = userService.createOrReactivate(AI_USERNAME_PREFIX + UUID.randomUUID(), name, game.getCreator().getLang());
+
+        // Create the player
+        Player player = playerService.createAI(game, user);
+
+        // Add player to the game
+        return gameService.addPlayer(game, player);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = ApplicationException.class)
+    public Game removeAIPlayer(Room room) {
+        logger.debug("Removing AI player from game in room {}", room);
+
+        // Get the game
+        Game game = getGameByRoom(room);
+
+        // Check the user performing the action is the creator
+        checkSessionUserIsCreator(game);
+
+        // Get the last AI player that joined
+        Player player = game.getPlayers().stream().filter(Player::isAi).max(Comparator.comparing(Player::getJoinOrder)).orElseThrow(AIPlayerDoesntExistsException::new);
+        User user = player.getUser();
+
+        // Remove the player from the game
+        game = gameService.removePlayer(game, player);
+
+        // Delete the player and its user, that only existed for this game
+        playerService.delete(player);
+        userService.delete(user);
+
+        return game;
     }
 
     @Override
@@ -239,6 +303,9 @@ public class CAHServiceImpl implements CAHService {
 
         // Delete the player
         playerService.delete(player);
+
+        // An AI player's user only existed for this game
+        if (player.isAi()) userService.delete(userKicked);
 
         return game;
     }
@@ -318,6 +385,16 @@ public class CAHServiceImpl implements CAHService {
         // Get the player
         Player player = getPlayerBySessionUserAndGame(game);
 
+        doPlayCard(game, player, card);
+
+        return gameService.update(game);
+    }
+
+    /**
+     * Juega la carta en nombre de {@code player}, sea quien tiene la sesión o una IA. Si con ella han
+     * jugado todos, abre la votación y deja votar a las IAs a las que les toque.
+     */
+    private void doPlayCard(Game game, Player player, Card card) {
         // If the game is Classic or dictatorship the creator cant
         if ((game.getVotationMode() == VotationModeEnum.CLASSIC || game.getVotationMode() == VotationModeEnum.DICTATORSHIP) && game.getCurrentRound().getRoundPresident().getId().equals(player.getId()))
             throw new RoundPresidentCannotPlayCardException();
@@ -331,9 +408,10 @@ public class CAHServiceImpl implements CAHService {
         // Set status to voting if everyone have played
         if (roundService.checkIfEveryoneHavePlayedACard(game.getCurrentRound())) {
             roundService.setStatus(game.getCurrentRound(), RoundStatusEnum.VOTING);
-        }
 
-        return gameService.update(game);
+            // The AI players vote as soon as the voting opens
+            voteAIPlayers(game);
+        }
     }
 
     @Override
@@ -354,6 +432,16 @@ public class CAHServiceImpl implements CAHService {
         // Get the player
         Player player = getPlayerBySessionUserAndGame(game);
 
+        doVoteCard(game, player, card);
+
+        return gameService.update(game);
+    }
+
+    /**
+     * Vota la carta en nombre de {@code player}, sea quien tiene la sesión o una IA. Si con su voto
+     * se alcanza el quórum, puntúa y cierra la ronda.
+     */
+    private void doVoteCard(Game game, Player player, Card card) {
         // Check you didn't vote for your own card
         if (roundService.getPlayedCardByCard(game.getCurrentRound(), card).getPlayer().getId().equals(player.getId()))
             throw new PlayerCannotVoteCardException();
@@ -380,8 +468,6 @@ public class CAHServiceImpl implements CAHService {
                 game.setStatus(GameStatusEnum.ENDING);
             }
         }
-
-        return gameService.update(game);
     }
 
     @Override
@@ -434,8 +520,8 @@ public class CAHServiceImpl implements CAHService {
      * Borra una partida que ha terminado por las reglas.
      * <p>
      * A diferencia de {@link #deleteGameByCreator} no mira quién tiene la sesión: la última ronda la
-     * puede cerrar cualquiera (en democracia el último en votar, en CLASSIC el presidente), y exigir
-     * al creador dejaba la partida colgada en ENDING.
+     * puede cerrar cualquiera (en democracia el último en votar, en CLASSIC el presidente, que puede
+     * ser una IA), y exigir al creador dejaba la partida colgada en ENDING.
      */
     @Override
     @Transactional(propagation = Propagation.REQUIRED, rollbackFor = ApplicationException.class)
@@ -444,8 +530,18 @@ public class CAHServiceImpl implements CAHService {
 
         Assert.assertNotNull(game, CommonErrorEnum.GAME_NOT_FOUND);
 
+        // The AI users only exist for this game: collect them before the players are gone
+        List<User> aiUsers = getAIUsers(game);
+
         // Delete the game (it checks the game is ending)
         gameService.endGame(game);
+
+        // Delete the AI users, now that no player references them
+        aiUsers.forEach(userService::delete);
+    }
+
+    private List<User> getAIUsers(Game game) {
+        return game.getPlayers().stream().filter(Player::isAi).map(Player::getUser).toList();
     }
 
     private void startRound(Game game, int roundNumber) {
@@ -473,6 +569,54 @@ public class CAHServiceImpl implements CAHService {
 
             game.getWhiteCardsDeck().removeAll(cardsToTransfer);
         }
+
+        // The AI players play as soon as the round starts
+        playAIPlayers(game);
+    }
+
+    /**
+     * Cada IA que no sea presidente de la ronda juega la carta que le diga la estrategia.
+     */
+    private void playAIPlayers(Game game) {
+        Round round = game.getCurrentRound();
+
+        for (Player player : aiPlayers(game)) {
+            if (round.getStatus() != RoundStatusEnum.PLAYING) return;
+            if (isRoundPresident(game, player)) continue;
+
+            Card card = aiPlayerStrategy.chooseCardToPlay(round, player);
+            if (card == null) throw new PlayerCannotDrawCardException();
+
+            doPlayCard(game, player, card);
+        }
+    }
+
+    /**
+     * Vota cada IA a la que le toque: en democracia todas, en el resto solo si es la presidenta de
+     * la ronda. Se para en cuanto la ronda se cierra.
+     */
+    private void voteAIPlayers(Game game) {
+        Round round = game.getCurrentRound();
+
+        for (Player player : aiPlayers(game)) {
+            if (round.getStatus() != RoundStatusEnum.VOTING) return;
+            if (game.getVotationMode() != VotationModeEnum.DEMOCRACY && !isRoundPresident(game, player)) continue;
+
+            Card card = aiPlayerStrategy.chooseCardToVote(round, player);
+            if (card == null) throw new PlayerCannotVoteCardException();
+
+            doVoteCard(game, player, card);
+        }
+    }
+
+    private List<Player> aiPlayers(Game game) {
+        return game.getPlayers().stream().filter(Player::isAi).sorted(Comparator.comparing(Player::getJoinOrder)).toList();
+    }
+
+    private boolean isRoundPresident(Game game, Player player) {
+        Player president = game.getCurrentRound().getRoundPresident();
+
+        return president != null && Objects.equals(president.getId(), player.getId());
     }
 
     private boolean checkIfGameEnded(Game game) {

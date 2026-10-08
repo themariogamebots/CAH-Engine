@@ -30,7 +30,9 @@ public enum CAHErrorEnum implements ErrorEnum {
     DICTIONARY_ALREADY_PUBLISHED(54L, "Diccionario ya publicado"),
     DICTIONARY_NOT_PUBLISHED(55L, "Diccionario no publicado"),
     DICTIONARY_MAX_COLLABORATORS_REACHED(56L, "Número máximo de colaboradores alcanzado"),
-    CARD_NOT_PLAYED(57L, "Carta no jugada");
+    CARD_NOT_PLAYED(57L, "Carta no jugada"),
+    AI_PLAYER_NOT_FOUND(58L, "No hay ningún jugador IA"),
+    GAME_NOT_ENOUGH_HUMANS(59L, "No hay suficientes jugadores humanos");
 
     final Long errorCode;
     final String errorDesc;

@@ -1,6 +1,7 @@
 package org.themarioga.engine.cah.models.game;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -11,6 +12,14 @@ public class Player extends org.themarioga.commons.engine.models.Player implemen
 
     @Column(nullable = false)
     private Integer points = 0;
+
+    /**
+     * Jugador controlado por el motor en lugar de por una persona. El default de la columna es lo
+     * que permite añadirla con partidas en curso (ver la migración V2.1.0_1 de CAH-Telegram).
+     */
+    @Column(nullable = false)
+    @ColumnDefault("false")
+    private Boolean ai = false;
 
     @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY, mappedBy = "player", orphanRemoval = true)
     private List<PlayerHandCard> hand = new ArrayList<>(0);
@@ -36,6 +45,21 @@ public class Player extends org.themarioga.commons.engine.models.Player implemen
 
     public void setPoints(Integer points) {
         this.points = points;
+    }
+
+    public Boolean getAi() {
+        return ai;
+    }
+
+    public void setAi(Boolean ai) {
+        this.ai = ai;
+    }
+
+    /**
+     * Atajo null-safe de {@link #getAi()}.
+     */
+    public boolean isAi() {
+        return Boolean.TRUE.equals(ai);
     }
 
     public List<PlayerHandCard> getHand() {
@@ -64,7 +88,7 @@ public class Player extends org.themarioga.commons.engine.models.Player implemen
 
     @Override
     public String toString() {
-        return "Player{" + super.toString() + ", points=" + points + '}';
+        return "Player{" + super.toString() + ", points=" + points + ", ai=" + ai + '}';
     }
 
 }

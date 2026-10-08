@@ -6,6 +6,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.themarioga.engine.cah.BaseTest;
+import org.themarioga.engine.cah.exceptions.game.GameAlreadyFilledException;
+import org.themarioga.engine.cah.exceptions.game.GameNotEnoughHumansException;
+import org.themarioga.engine.cah.exceptions.player.AIPlayerDoesntExistsException;
+import org.themarioga.engine.cah.models.game.PlayedCard;
+import org.themarioga.engine.cah.models.game.VotedCard;
+import org.themarioga.commons.engine.exceptions.ApplicationException;
+import org.themarioga.commons.engine.exceptions.user.UserDoesntExistsException;
 import org.themarioga.engine.cah.enums.RoundStatusEnum;
 import org.themarioga.engine.cah.enums.VotationModeEnum;
 import org.themarioga.engine.cah.exceptions.round.RoundPresidentCannotPlayCardException;
@@ -810,6 +817,285 @@ class CAHServiceTest extends BaseTest {
 
         Assertions.assertNotNull(winner);
         Assertions.assertEquals(UUID.fromString("55555555-5555-5555-5555-555555555555"), winner.getUser().getId());
+    }
+
+    // ///////////// Jugadores IA //////////////////
+
+    private static final UUID CREATOR = UUID.fromString("44444444-4444-4444-4444-444444444444");
+    private static final UUID HUMAN = UUID.fromString("55555555-5555-5555-5555-555555555555");
+
+    /**
+     * Partida nueva con el creador, otro humano y {@code aiPlayers} IAs, con el modo y las rondas
+     * indicados. La sesión se queda con el creador.
+     */
+    private Game createGameWithAIPlayers(VotationModeEnum mode, int rounds, int aiPlayers) {
+        loginAs(CREATOR);
+        Game game = cahService.createGame("AI Game");
+        cahService.setVotationMode(game.getRoom(), mode);
+        cahService.setNumberOfRoundsToEnd(game.getRoom(), rounds);
+
+        loginAs(HUMAN);
+        cahService.addPlayer(game.getRoom());
+
+        loginAs(CREATOR);
+        for (int i = 1; i <= aiPlayers; i++) {
+            cahService.addAIPlayer(game.getRoom(), "IA " + i);
+        }
+
+        return game;
+    }
+
+    private void loginAs(UUID userId) {
+        SecurityUtils.setUserDetails(userService.getById(userId), UserRole.USER);
+    }
+
+    private Player playerOf(Game game, UUID userId) {
+        return game.getPlayers().stream().filter(p -> p.getUser().getId().equals(userId)).findFirst().orElseThrow();
+    }
+
+    private Player aiPlayerOf(Game game) {
+        return game.getPlayers().stream().filter(Player::isAi).findFirst().orElseThrow();
+    }
+
+    /**
+     * Juega la primera carta de la mano del humano indicado.
+     */
+    private void humanPlays(Game game, UUID userId) {
+        loginAs(userId);
+        cahService.playCard(game.getRoom(), playerOf(game, userId).getHand().get(0).getCard());
+    }
+
+    /**
+     * Vota la primera carta jugada que no sea la suya.
+     */
+    private void humanVotes(Game game, UUID userId) {
+        loginAs(userId);
+        Player player = playerOf(game, userId);
+        PlayedCard target = game.getCurrentRound().getPlayedCards().stream().filter(pc -> !pc.getPlayer().getId().equals(player.getId())).findFirst().orElseThrow();
+        cahService.voteCard(game.getRoom(), target.getCard());
+    }
+
+    private boolean aiPlayedThisRound(Game game) {
+        Player ai = aiPlayerOf(game);
+        return game.getCurrentRound().getPlayedCards().stream().anyMatch(pc -> pc.getPlayer().getId().equals(ai.getId()));
+    }
+
+    @Test
+    void testAddAIPlayer() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.CLASSIC, 1, 1);
+
+        Assertions.assertEquals(3, game.getPlayers().size());
+
+        Player ai = aiPlayerOf(game);
+        Assertions.assertTrue(ai.isAi());
+        Assertions.assertEquals(2, ai.getJoinOrder());
+        Assertions.assertTrue(ai.getUser().getUsername().startsWith("ai:"));
+        Assertions.assertEquals("IA 1", ai.getUser().getName());
+        Assertions.assertEquals(game.getCreator().getLang().getId(), ai.getUser().getLang().getId());
+        Assertions.assertFalse(playerOf(game, HUMAN).isAi());
+    }
+
+    @Test
+    void testAddAIPlayer_GameOnlyCreatorCanPerformActionException() {
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("11111111-1111-1111-1111-111111111111")), UserRole.USER);
+
+        Assertions.assertThrows(GameOnlyCreatorCanPerformActionException.class, () -> cahService.addAIPlayer(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")), "IA 1"));
+    }
+
+    /**
+     * La partida de los datos de prueba ya tiene sus tres plazas ocupadas: una IA también ocupa plaza.
+     */
+    @Test
+    void testAddAIPlayer_GameAlreadyFilledException() {
+        Assertions.assertThrows(GameAlreadyFilledException.class, () -> cahService.addAIPlayer(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")), "IA 1"));
+    }
+
+    @Test
+    void testAddAIPlayer_EmptyName() {
+        Assertions.assertThrows(ApplicationException.class, () -> cahService.addAIPlayer(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")), " "));
+    }
+
+    @Test
+    void testRemoveAIPlayer_RemovesTheLastOneAndItsUser() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.CLASSIC, 1, 2);
+        Player lastAi = game.getPlayers().stream().filter(Player::isAi).filter(p -> p.getJoinOrder() == 3).findFirst().orElseThrow();
+        String lastAiUsername = lastAi.getUser().getUsername();
+
+        game = cahService.removeAIPlayer(game.getRoom());
+        getCurrentSession().flush();
+
+        Assertions.assertEquals(3, game.getPlayers().size());
+        Assertions.assertEquals(1, game.getPlayers().stream().filter(Player::isAi).count());
+        Assertions.assertEquals("IA 1", aiPlayerOf(game).getUser().getName());
+        Assertions.assertThrows(UserDoesntExistsException.class, () -> userService.getByUsername(lastAiUsername));
+    }
+
+    @Test
+    void testRemoveAIPlayer_AIPlayerDoesntExistsException() {
+        Assertions.assertThrows(AIPlayerDoesntExistsException.class, () -> cahService.removeAIPlayer(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000"))));
+    }
+
+    @Test
+    void testKickPlayer_AIPlayerDeletesItsUser() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.CLASSIC, 1, 1);
+        org.themarioga.commons.engine.models.User aiUser = aiPlayerOf(game).getUser();
+        String aiUsername = aiUser.getUsername();
+
+        cahService.kickPlayer(game.getRoom(), aiUser);
+        getCurrentSession().flush();
+
+        Assertions.assertThrows(UserDoesntExistsException.class, () -> userService.getByUsername(aiUsername));
+    }
+
+    @Test
+    void testDeleteGameByCreator_DeletesTheAIUsers() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.CLASSIC, 1, 1);
+        String aiUsername = aiPlayerOf(game).getUser().getUsername();
+
+        cahService.deleteGameByCreator(game.getRoom());
+        getCurrentSession().flush();
+
+        Assertions.assertThrows(UserDoesntExistsException.class, () -> userService.getByUsername(aiUsername));
+        Assertions.assertNotNull(userService.getByUsername("fifth"), "los humanos no se tocan");
+    }
+
+    @Test
+    void testStartGame_GameNotEnoughHumansException() {
+        loginAs(CREATOR);
+        Game game = cahService.createGame("AI Game");
+        cahService.addAIPlayer(game.getRoom(), "IA 1");
+        cahService.addAIPlayer(game.getRoom(), "IA 2");
+
+        Assertions.assertThrows(GameNotEnoughHumansException.class, () -> cahService.startGame(game.getRoom()));
+    }
+
+    /**
+     * En CLASSIC la presidencia rota por orden de llegada, así que en tres rondas pasa por el
+     * creador, el otro humano y la IA. Cuando le toca a la IA, elige ganadora en cuanto juega el
+     * último humano y la ronda se cierra sola.
+     */
+    @Test
+    void completeClassicGameWithAIPlayerTest() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.CLASSIC, 3, 1);
+
+        cahService.startGame(game.getRoom());
+
+        // Ronda 0: preside el creador. La IA ya ha jugado al empezar
+        Assertions.assertEquals(CREATOR, game.getCurrentRound().getRoundPresident().getUser().getId());
+        Assertions.assertTrue(aiPlayedThisRound(game));
+        Assertions.assertEquals(1, game.getCurrentRound().getPlayedCards().size());
+        Assertions.assertEquals(2, aiPlayerOf(game).getHand().size());
+
+        humanPlays(game, HUMAN);
+        Assertions.assertEquals(RoundStatusEnum.VOTING, game.getCurrentRound().getStatus());
+        Assertions.assertTrue(game.getCurrentRound().getVotedCards().isEmpty(), "la IA no preside: no vota");
+
+        humanVotes(game, CREATOR);
+        Assertions.assertEquals(RoundStatusEnum.ENDING, game.getCurrentRound().getStatus());
+
+        cahService.nextRound(game);
+
+        // Ronda 1: preside el otro humano
+        Assertions.assertEquals(HUMAN, game.getCurrentRound().getRoundPresident().getUser().getId());
+        Assertions.assertTrue(aiPlayedThisRound(game));
+        Assertions.assertEquals(2, aiPlayerOf(game).getHand().size(), "la mano de la IA se rellena como la de todos");
+
+        humanPlays(game, CREATOR);
+        humanVotes(game, HUMAN);
+        Assertions.assertEquals(RoundStatusEnum.ENDING, game.getCurrentRound().getStatus());
+
+        cahService.nextRound(game);
+
+        // Ronda 2: preside la IA, que no juega
+        Assertions.assertTrue(game.getCurrentRound().getRoundPresident().isAi());
+        Assertions.assertTrue(game.getCurrentRound().getPlayedCards().isEmpty());
+
+        humanPlays(game, CREATOR);
+        Assertions.assertEquals(RoundStatusEnum.PLAYING, game.getCurrentRound().getStatus());
+
+        humanPlays(game, HUMAN);
+
+        // La IA ha votado nada más abrirse la votación, y con eso la ronda y la partida han acabado
+        Assertions.assertEquals(1, game.getCurrentRound().getVotedCards().size());
+        Assertions.assertTrue(game.getCurrentRound().getVotedCards().get(0).getPlayer().isAi());
+        Assertions.assertEquals(RoundStatusEnum.ENDING, game.getCurrentRound().getStatus());
+        Assertions.assertEquals(GameStatusEnum.ENDING, game.getStatus());
+
+        Assertions.assertEquals(3, game.getPlayers().stream().mapToInt(Player::getPoints).sum());
+        Assertions.assertNotNull(cahService.getWinner(game));
+
+        // La última ronda la ha cerrado la IA con la jugada del otro humano: la partida se borra
+        // sin que la sesión sea la del creador
+        String aiUsername = aiPlayerOf(game).getUser().getUsername();
+        Room room = game.getRoom();
+        loginAs(HUMAN);
+        cahService.endGame(game);
+        getCurrentSession().flush();
+
+        Assertions.assertNull(gameService.getByRoom(room));
+        Assertions.assertThrows(UserDoesntExistsException.class, () -> userService.getByUsername(aiUsername));
+    }
+
+    /**
+     * En DICTATORSHIP preside siempre el creador: la IA juega, pero no vota nunca.
+     */
+    @Test
+    void completeDictatorshipGameWithAIPlayerTest() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.DICTATORSHIP, 2, 1);
+
+        cahService.startGame(game.getRoom());
+
+        for (int round = 0; round < 2; round++) {
+            Assertions.assertTrue(aiPlayedThisRound(game));
+
+            humanPlays(game, HUMAN);
+            Assertions.assertEquals(RoundStatusEnum.VOTING, game.getCurrentRound().getStatus());
+            Assertions.assertTrue(game.getCurrentRound().getVotedCards().isEmpty());
+
+            humanVotes(game, CREATOR);
+            Assertions.assertEquals(RoundStatusEnum.ENDING, game.getCurrentRound().getStatus());
+
+            if (round == 0) cahService.nextRound(game);
+        }
+
+        Assertions.assertEquals(GameStatusEnum.ENDING, game.getStatus());
+    }
+
+    /**
+     * En DEMOCRACY la IA juega al empezar la ronda y vota al abrirse la votación; los humanos
+     * siempre son los últimos y son ellos los que cierran cada fase.
+     */
+    @Test
+    void completeDemocracyGameWithAIPlayerTest() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.DEMOCRACY, 2, 1);
+
+        cahService.startGame(game.getRoom());
+
+        for (int round = 0; round < 2; round++) {
+            Assertions.assertTrue(aiPlayedThisRound(game));
+
+            humanPlays(game, CREATOR);
+            humanPlays(game, HUMAN);
+            Assertions.assertEquals(RoundStatusEnum.VOTING, game.getCurrentRound().getStatus());
+
+            // La IA ya ha votado, y no a su propia carta
+            Player ai = aiPlayerOf(game);
+            VotedCard aiVote = game.getCurrentRound().getVotedCards().stream().filter(vc -> vc.getPlayer().getId().equals(ai.getId())).findFirst().orElseThrow();
+            PlayedCard aiCard = game.getCurrentRound().getPlayedCards().stream().filter(pc -> pc.getPlayer().getId().equals(ai.getId())).findFirst().orElseThrow();
+            Assertions.assertNotEquals(aiCard.getCard().getId(), aiVote.getCard().getId());
+            Assertions.assertEquals(1, game.getCurrentRound().getVotedCards().size());
+
+            humanVotes(game, CREATOR);
+            Assertions.assertEquals(RoundStatusEnum.VOTING, game.getCurrentRound().getStatus());
+
+            humanVotes(game, HUMAN);
+            Assertions.assertEquals(3, game.getCurrentRound().getVotedCards().size());
+            Assertions.assertEquals(RoundStatusEnum.ENDING, game.getCurrentRound().getStatus());
+
+            if (round == 0) cahService.nextRound(game);
+        }
+
+        Assertions.assertEquals(GameStatusEnum.ENDING, game.getStatus());
     }
 
 }

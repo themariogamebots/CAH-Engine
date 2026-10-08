@@ -12,6 +12,7 @@ import org.themarioga.engine.cah.enums.CAHErrorEnum;
 import org.themarioga.engine.cah.enums.PunctuationModeEnum;
 import org.themarioga.engine.cah.enums.VotationModeEnum;
 import org.themarioga.engine.cah.exceptions.game.GameAlreadyFilledException;
+import org.themarioga.engine.cah.exceptions.game.GameNotEnoughHumansException;
 import org.themarioga.engine.cah.exceptions.game.GameNotFilledException;
 import org.themarioga.engine.cah.exceptions.dictionary.DictionaryDoesntExistsException;
 import org.themarioga.engine.cah.models.dictionaries.Dictionary;
@@ -294,6 +295,10 @@ public class GameServiceImpl implements GameService {
         if (game.getPlayers().size() < gameConfig.getDefaultMinNumberOfPlayers())
             throw new GameNotFilledException();
 
+        // Check there are enough humans: the AI players fill the game, but don't replace people
+        if (countHumanPlayers(game) < gameConfig.getMinHumanPlayers())
+            throw new GameNotEnoughHumansException();
+
         // Check the players are less than max
         if (game.getPlayers().size() > game.getMaxNumberOfPlayers())
             throw new GameAlreadyFilledException();
@@ -367,8 +372,9 @@ public class GameServiceImpl implements GameService {
         // Add deletion votes
         game.getDeletionVotes().add(player.getUser());
 
-        // If more than half of the game players vote to delete the game...
-        if (game.getDeletionVotes().size() >= ((game.getPlayers().size() / 2) + 1)) {
+        // If more than half of the human players vote to delete the game... The AI players never
+        // vote, so counting them would make the quorum unreachable
+        if (game.getDeletionVotes().size() >= ((countHumanPlayers(game) / 2) + 1)) {
             game.setStatus(GameStatusEnum.DELETING);
         }
 
@@ -406,6 +412,10 @@ public class GameServiceImpl implements GameService {
         logger.debug("Getting game with room: {}", room);
 
         return gameDao.getByRoom(room);
+    }
+
+    private int countHumanPlayers(Game game) {
+        return (int) game.getPlayers().stream().filter(player -> !player.isAi()).count();
     }
 
 }
