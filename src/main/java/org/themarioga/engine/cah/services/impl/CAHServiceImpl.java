@@ -23,6 +23,7 @@ import org.themarioga.engine.cah.models.game.*;
 import org.themarioga.engine.cah.services.intf.CAHService;
 import org.themarioga.engine.cah.services.intf.game.GameService;
 import org.themarioga.engine.cah.services.intf.game.PlayerService;
+import org.themarioga.engine.cah.services.intf.game.RoundResultService;
 import org.themarioga.engine.cah.services.intf.game.RoundService;
 import org.themarioga.commons.engine.enums.CommonErrorEnum;
 import org.themarioga.commons.engine.enums.GameStatusEnum;
@@ -56,6 +57,7 @@ public class CAHServiceImpl implements CAHService {
     private final GameService gameService;
     private final PlayerService playerService;
     private final RoundService roundService;
+    private final RoundResultService roundResultService;
     private final UserService userService;
     private final AIPlayerStrategy aiPlayerStrategy;
     private final GameConfig gameConfig;
@@ -63,11 +65,12 @@ public class CAHServiceImpl implements CAHService {
     private final Random random = new SecureRandom();
 
     @Autowired
-    public CAHServiceImpl(RoomService roomService, GameService gameService, PlayerService playerService, RoundService roundService, UserService userService, AIPlayerStrategy aiPlayerStrategy, GameConfig gameConfig) {
+    public CAHServiceImpl(RoomService roomService, GameService gameService, PlayerService playerService, RoundService roundService, RoundResultService roundResultService, UserService userService, AIPlayerStrategy aiPlayerStrategy, GameConfig gameConfig) {
         this.roomService = roomService;
         this.gameService = gameService;
         this.playerService = playerService;
         this.roundService = roundService;
+        this.roundResultService = roundResultService;
         this.userService = userService;
         this.aiPlayerStrategy = aiPlayerStrategy;
         this.gameConfig = gameConfig;
@@ -455,6 +458,9 @@ public class CAHServiceImpl implements CAHService {
             PlayedCard mostVotedCard = roundService.getPlayedCardByCard(game.getCurrentRound(), roundService.getMostVotedCard(game.getCurrentRound()));
             if (mostVotedCard == null)
                 throw new RoundWrongStatusException();
+
+            // Keep how every card did, before the round (and its cards and votes) is deleted
+            roundResultService.recordRound(game.getCurrentRound(), mostVotedCard.getCard());
 
             // Give 1 point to the player who played the most voted card
             playerService.incrementPoints(mostVotedCard.getPlayer());

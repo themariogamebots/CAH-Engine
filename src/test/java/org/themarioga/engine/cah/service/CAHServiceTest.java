@@ -6,6 +6,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.themarioga.engine.cah.BaseTest;
+import java.util.List;
+import org.themarioga.engine.cah.models.dictionaries.Card;
+import org.themarioga.engine.cah.services.intf.game.RoundResultService;
+import org.themarioga.engine.cah.models.game.RoundResult;
 import org.themarioga.engine.cah.exceptions.game.GameAlreadyFilledException;
 import org.themarioga.engine.cah.exceptions.game.GameNotEnoughHumansException;
 import org.themarioga.engine.cah.exceptions.player.AIPlayerDoesntExistsException;
@@ -57,6 +61,8 @@ class CAHServiceTest extends BaseTest {
     GameService gameService;
     @Autowired
     CardService cardService;
+    @Autowired
+    RoundResultService roundResultService;
 
     @BeforeEach
     void setUpUser() {
@@ -1096,6 +1102,71 @@ class CAHServiceTest extends BaseTest {
         }
 
         Assertions.assertEquals(GameStatusEnum.ENDING, game.getStatus());
+    }
+
+    // ///////////// Histórico de rondas //////////////////
+
+    /**
+     * Al cerrarse la votación queda una fila por carta jugada, antes de que la ronda se borre.
+     */
+    @Test
+    void testVoteCard_RecordsTheRoundResults() {
+        Game game = cahService.startGame(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")));
+        UUID blackCardId = game.getCurrentRound().getRoundBlackCard().getId();
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("11111111-1111-1111-1111-111111111111")), UserRole.USER);
+        cahService.playCard(game.getRoom(), game.getPlayers().get(1).getHand().get(0).getCard());
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("33333333-3333-3333-3333-333333333333")), UserRole.USER);
+        cahService.playCard(game.getRoom(), game.getPlayers().get(2).getHand().get(0).getCard());
+
+        Assertions.assertTrue(roundResultService.getByBlackCardId(blackCardId).isEmpty(), "mientras se vota no hay nada que guardar");
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")), UserRole.USER);
+        Card voted = game.getCurrentRound().getPlayedCards().get(1).getCard();
+        cahService.voteCard(game.getRoom(), voted);
+
+        cahService.nextRound(game);
+        getCurrentSession().flush();
+
+        List<RoundResult> results = roundResultService.getByBlackCardId(blackCardId);
+        Assertions.assertEquals(2, results.size(), "las filas sobreviven al borrado de la ronda");
+
+        RoundResult winner = results.stream().filter(RoundResult::getWon).findFirst().orElseThrow();
+        Assertions.assertEquals(voted.getId(), winner.getWhiteCardId());
+        Assertions.assertEquals(1, winner.getVotes());
+        Assertions.assertEquals(1, results.stream().filter(RoundResult::getWon).count());
+
+        for (RoundResult result : results) {
+            Assertions.assertEquals(game.getDictionary().getId(), result.getDictionaryId());
+            Assertions.assertEquals(2, result.getCandidates());
+            Assertions.assertEquals(VotationModeEnum.CLASSIC, result.getVotationMode());
+            Assertions.assertFalse(result.getAiPlayer());
+            Assertions.assertEquals(0, result.getAiVotes());
+        }
+    }
+
+    /**
+     * Con una IA en democracia: su carta queda marcada como de IA y su voto cuenta como voto de IA.
+     */
+    @Test
+    void testVoteCard_RecordsTheAIPlayerInTheRoundResults() {
+        Game game = createGameWithAIPlayers(VotationModeEnum.DEMOCRACY, 1, 1);
+        cahService.startGame(game.getRoom());
+        UUID blackCardId = game.getCurrentRound().getRoundBlackCard().getId();
+
+        humanPlays(game, CREATOR);
+        humanPlays(game, HUMAN);
+        humanVotes(game, CREATOR);
+        humanVotes(game, HUMAN);
+        getCurrentSession().flush();
+
+        List<RoundResult> results = roundResultService.getByBlackCardId(blackCardId);
+        Assertions.assertEquals(3, results.size());
+        Assertions.assertEquals(1, results.stream().filter(RoundResult::getAiPlayer).count());
+        Assertions.assertEquals(3, results.stream().mapToInt(RoundResult::getVotes).sum());
+        Assertions.assertEquals(1, results.stream().mapToInt(RoundResult::getAiVotes).sum());
+        Assertions.assertEquals(1, results.stream().filter(RoundResult::getWon).count());
     }
 
 }
