@@ -196,9 +196,19 @@ public class RoundServiceImpl implements RoundService {
         if (mostVotedCards.isEmpty())
             return null;
 
-        // Break ties between equally-voted cards at random instead of relying on
-        // arbitrary database row order
-        return mostVotedCards.get(random.nextInt(mostVotedCards.size()));
+        if (mostVotedCards.size() == 1)
+            return mostVotedCards.get(0);
+
+        // Break ties at random, but the same way every time for the same round: the engine picks the
+        // winner to give the point and the platform asks again to announce it, and two independent
+        // draws could announce a card that didn't get the point. Sorting first keeps it independent
+        // of the database row order
+        List<Card> tied = new ArrayList<>(mostVotedCards);
+        tied.sort(Comparator.comparing(Card::getId));
+
+        Random tieBreak = round.getId() != null ? new Random(round.getId().getMostSignificantBits() ^ round.getId().getLeastSignificantBits()) : random;
+
+        return tied.get(tieBreak.nextInt(tied.size()));
     }
 
     @Override

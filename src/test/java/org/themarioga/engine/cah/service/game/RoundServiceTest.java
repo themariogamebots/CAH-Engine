@@ -293,6 +293,27 @@ class RoundServiceTest {
         Assertions.assertTrue(mostVotedCard == whiteCard || mostVotedCard == whiteCard2);
     }
 
+    /**
+     * El motor elige ganadora para dar el punto y la plataforma vuelve a preguntar para anunciarla: en
+     * un empate, las dos respuestas tienen que coincidir, venga en el orden que venga de la base de datos.
+     */
+    @Test
+    void testGetMostVotedCard_TieIsTheSameForTheSameRound() {
+        Card whiteCard2 = new Card();
+        whiteCard2.setId(UUID.fromString("22222222-2222-2222-2222-222222222222"));
+        whiteCard2.setType(CardTypeEnum.WHITE);
+        Card whiteCard3 = new Card();
+        whiteCard3.setId(UUID.fromString("33333333-3333-3333-3333-333333333333"));
+        whiteCard3.setType(CardTypeEnum.WHITE);
+
+        when(roundDao.getMostVotedCards(round)).thenReturn(java.util.List.of(whiteCard, whiteCard2, whiteCard3), java.util.List.of(whiteCard3, whiteCard, whiteCard2));
+
+        Card first = roundService.getMostVotedCard(round);
+        Card second = roundService.getMostVotedCard(round);
+
+        Assertions.assertEquals(first.getId(), second.getId());
+    }
+
     @Test
     void testGetMostVotedCard_NoVotes() {
         when(roundDao.getMostVotedCards(round)).thenReturn(java.util.List.of());
