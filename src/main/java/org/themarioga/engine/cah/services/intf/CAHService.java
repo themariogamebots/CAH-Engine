@@ -43,4 +43,6 @@ public interface CAHService {
     Game nextRound(Game game);
 
     Player getWinner(Game game);
+
+    void endGame(Game game);
 }

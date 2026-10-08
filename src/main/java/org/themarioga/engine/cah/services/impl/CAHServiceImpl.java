@@ -430,6 +430,24 @@ public class CAHServiceImpl implements CAHService {
         return players.get(0);
     }
 
+    /**
+     * Borra una partida que ha terminado por las reglas.
+     * <p>
+     * A diferencia de {@link #deleteGameByCreator} no mira quién tiene la sesión: la última ronda la
+     * puede cerrar cualquiera (en democracia el último en votar, en CLASSIC el presidente), y exigir
+     * al creador dejaba la partida colgada en ENDING.
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = ApplicationException.class)
+    public void endGame(Game game) {
+        logger.debug("Ending the game {}", game);
+
+        Assert.assertNotNull(game, CommonErrorEnum.GAME_NOT_FOUND);
+
+        // Delete the game (it checks the game is ending)
+        gameService.endGame(game);
+    }
+
     private void startRound(Game game, int roundNumber) {
         logger.debug("Starting round on game {}", game);
 

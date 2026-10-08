@@ -20,6 +20,7 @@ import org.themarioga.engine.cah.services.intf.game.GameService;
 import org.themarioga.commons.engine.enums.GameStatusEnum;
 import org.themarioga.commons.engine.exceptions.game.GameCreatorCannotLeaveException;
 import org.themarioga.commons.engine.exceptions.game.GameDoesntExistsException;
+import org.themarioga.commons.engine.exceptions.game.GameNotEndingException;
 import org.themarioga.commons.engine.exceptions.game.GameNotStartedException;
 import org.themarioga.commons.engine.exceptions.game.GameOnlyCreatorCanPerformActionException;
 import org.themarioga.commons.engine.exceptions.player.PlayerDoesntExistsException;
@@ -606,6 +607,23 @@ class CAHServiceTest extends BaseTest {
 
         Assertions.assertNotNull(winner);
         Assertions.assertEquals(UUID.fromString("66666666-6666-6666-6666-666666666666"), winner.getUser().getId());
+
+        // Todo el test va en una sola transacción, con cartas repartidas y jugadas en la misma: si
+        // alguna carta jugada se quedara en player_hand_card, borrar la partida violaría la FK. Y la
+        // sesión no es la del creador, que no hace falta para cerrar una partida terminada
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("55555555-5555-5555-5555-555555555555")), UserRole.USER);
+        Room room = game.getRoom();
+        cahService.endGame(game);
+        getCurrentSession().flush();
+
+        Assertions.assertNull(gameService.getByRoom(room));
+    }
+
+    @Test
+    void testEndGame_GameNotEndingException() {
+        Game game = cahService.startGame(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")));
+
+        Assertions.assertThrows(GameNotEndingException.class, () -> cahService.endGame(game));
     }
 
     @Test

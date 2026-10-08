@@ -86,7 +86,10 @@ public class PlayerServiceImpl implements PlayerService {
             player.getHand().add(playerHandCard);
         }
 
-        playerDao.createOrUpdate(player);
+        // persist y no merge: el id de PlayerHandCard sale de sus asociaciones, y con merge la mano se
+        // queda con las instancias sin gestionar mientras el contexto guarda copias. removeCardFromHand
+        // necesita que las de la mano sean las gestionadas para poder borrarlas
+        playerDao.create(player);
     }
 
     @Override
@@ -114,6 +117,12 @@ public class PlayerServiceImpl implements PlayerService {
             throw new PlayerCannotPlayCardException();
 
         player.getHand().remove(cards.get());
+
+        // Se borra a mano y no se deja a orphanRemoval: si la carta se reparte y se juega en la misma
+        // transacción, todavía no está en la foto de la colección, Hibernate no la ve huérfana y la
+        // inserta igual. La partida ya no se podía borrar por la FK de player_hand_card. El remove
+        // cancela el insert pendiente.
+        playerDao.getEntityManager().remove(cards.get());
 
         return playerDao.createOrUpdate(player);
     }

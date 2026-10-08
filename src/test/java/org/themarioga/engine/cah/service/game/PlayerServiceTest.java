@@ -1,5 +1,6 @@
 package org.themarioga.engine.cah.service.game;
 
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -108,7 +109,7 @@ class PlayerServiceTest {
         playerService.insertWhiteCardsIntoPlayerHand(player, cards);
 
         Assertions.assertEquals(1, player.getHand().size());
-        verify(playerDao).createOrUpdate(player);
+        verify(playerDao).create(player);
     }
 
     @Test
@@ -127,11 +128,14 @@ class PlayerServiceTest {
         playerHandCard.setCard(card);
         player.getHand().add(playerHandCard);
 
+        EntityManager entityManager = mock(EntityManager.class);
+        when(playerDao.getEntityManager()).thenReturn(entityManager);
         when(playerDao.createOrUpdate(player)).thenReturn(player);
 
         Player updatedPlayer = playerService.removeCardFromHand(player, card);
 
         Assertions.assertEquals(0, updatedPlayer.getHand().size());
+        verify(entityManager).remove(playerHandCard);
     }
 
     @Test
