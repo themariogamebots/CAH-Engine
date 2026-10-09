@@ -1,6 +1,7 @@
 package org.themarioga.engine.cah.models.game;
 
 import jakarta.persistence.*;
+import org.hibernate.Hibernate;
 import org.hibernate.annotations.ColumnDefault;
 
 import java.io.Serializable;
@@ -33,10 +34,14 @@ public class Player extends org.themarioga.commons.engine.models.Player implemen
     /**
      * La partida a la que pertenece, ya con el tipo de CAH: la clase base la declara con el tipo
      * genérico y obligaba a castear en cada consumidor.
+     * <p>
+     * La asociación es perezosa y apunta a la clase base abstracta, así que si la partida no está ya
+     * cargada en la sesión Hibernate devuelve un proxy de la clase base, que no se puede castear: hay
+     * que desenvolverlo. Pasa en cuanto un update de Telegram carga primero al jugador.
      */
     @Override
     public Game getGame() {
-        return (Game) super.getGame();
+        return (Game) Hibernate.unproxy(super.getGame());
     }
 
     public Integer getPoints() {
