@@ -23,6 +23,7 @@ import org.themarioga.engine.cah.exceptions.round.RoundPresidentCannotPlayCardEx
 import org.themarioga.engine.cah.exceptions.round.RoundWrongStatusException;
 import org.themarioga.engine.cah.models.dictionaries.Dictionary;
 import org.themarioga.engine.cah.models.game.Game;
+import org.themarioga.engine.cah.config.GameConfig;
 import org.themarioga.engine.cah.models.game.Player;
 import org.themarioga.engine.cah.services.intf.CAHService;
 import org.themarioga.engine.cah.services.intf.dictionaries.CardService;
@@ -63,6 +64,8 @@ class CAHServiceTest extends BaseTest {
     CardService cardService;
     @Autowired
     RoundResultService roundResultService;
+    @Autowired
+    GameConfig gameConfig;
 
     @BeforeEach
     void setUpUser() {
@@ -528,6 +531,39 @@ class CAHServiceTest extends BaseTest {
         cahService.nextRound(game);
 
         Assertions.assertEquals(1, game.getCurrentRound().getRoundNumber());
+    }
+
+    @Test
+    void testNextRound_HandsBiggerThanTheLimitDrawNothing() {
+        Game game = cahService.startGame(roomService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")));
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("11111111-1111-1111-1111-111111111111")), UserRole.USER);
+
+        cahService.playCard(game.getRoom(), game.getPlayers().get(1).getHand().get(0).getCard());
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("33333333-3333-3333-3333-333333333333")), UserRole.USER);
+
+        cahService.playCard(game.getRoom(), game.getPlayers().get(2).getHand().get(0).getCard());
+
+        SecurityUtils.setUserDetails(userService.getById(UUID.fromString("00000000-0000-0000-0000-000000000000")), UserRole.USER);
+
+        cahService.voteCard(game.getRoom(), game.getCurrentRound().getPlayedCards().get(1).getCard());
+
+        // The limit is lowered mid-game, below what every player already holds
+        Integer numberOfCardsInHand = gameConfig.getNumberOfCardsInHand();
+        gameConfig.setNumberOfCardsInHand(1);
+        try {
+            int whiteCardsInDeck = game.getWhiteCardsDeck().size();
+
+            cahService.nextRound(game);
+
+            Assertions.assertEquals(1, game.getCurrentRound().getRoundNumber());
+            Assertions.assertEquals(whiteCardsInDeck, game.getWhiteCardsDeck().size(), "nobody draws");
+            Assertions.assertEquals(3, game.getPlayers().get(0).getHand().size());
+            Assertions.assertEquals(2, game.getPlayers().get(1).getHand().size());
+        } finally {
+            gameConfig.setNumberOfCardsInHand(numberOfCardsInHand);
+        }
     }
 
     @Test

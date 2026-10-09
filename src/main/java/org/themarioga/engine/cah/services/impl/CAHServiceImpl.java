@@ -561,10 +561,9 @@ public class CAHServiceImpl implements CAHService {
 
         // Fill player hands
         for (Player player : game.getPlayers()) {
-            int numberCardsNeedToFillHand = gameConfig.getNumberOfCardsInHand() - player.getHand().size();
-
-            if (numberCardsNeedToFillHand < 0 || numberCardsNeedToFillHand > gameConfig.getNumberOfCardsInHand())
-                throw new PlayerCannotDrawCardException();
+            // A hand can be bigger than the limit if the limit was lowered mid-game: that player
+            // draws nothing and the hand shrinks back as cards are played
+            int numberCardsNeedToFillHand = Math.max(0, gameConfig.getNumberOfCardsInHand() - player.getHand().size());
 
             // Deal a random sample of cards instead of always the first ones in the deck,
             // since the deck's persisted order is not itself randomized
